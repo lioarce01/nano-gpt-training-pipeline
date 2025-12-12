@@ -1,0 +1,36 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+
+# Checkpoints and outputs
+out*/
+*.pt
+*.bin
+*.pkl
+
+# Data
+data/**/train.bin
+data/**/val.bin
+data/**/meta.pkl
+
+# OS junk
+.DS_Store
+Thumbs.db
+

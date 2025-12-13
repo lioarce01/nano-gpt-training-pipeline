@@ -1,6 +1,5 @@
 import argparse
 import importlib.util
-import json
 import math
 import os
 import time
@@ -8,9 +7,9 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
-from safetensors.torch import save_file
 
 from model import GPT, GPTConfig
+from checkpoint import CheckpointManager
 
 
 def load_config(config_path: str) -> dict:
@@ -75,21 +74,64 @@ def main():
         vocab_size = 50257  # GPT-2 vocab size fallback
 
     # model init
-    model_args = dict(
-        vocab_size=vocab_size,
-        block_size=cfg["block_size"],
-        n_layer=cfg["n_layer"],
-        n_head=cfg["n_head"],
-        n_embd=cfg["n_embd"],
-        dropout=cfg.get("dropout", 0.0),
-    )
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf).to(device_type)
+    init_from = cfg.get("init_from", "scratch")  # 'scratch' or 'resume'
+    finetune_lora = cfg.get("finetune_lora", False)  # LoRA fine-tuning mode
 
+    if init_from == "scratch":
+        # Initialize from scratch (standard training)
+        print("Initializing model from scratch...")
+        model_args = dict(
+            vocab_size=vocab_size,
+            block_size=cfg["block_size"],
+            n_layer=cfg["n_layer"],
+            n_head=cfg["n_head"],
+            n_embd=cfg["n_embd"],
+            dropout=cfg.get("dropout", 0.0),
+        )
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf).to(device_type)
+
+    elif init_from == "resume":
+        # Load from checkpoint (for fine-tuning or resuming training)
+        resume_dir = cfg.get("resume_dir", out_dir)
+        ckpt_path = os.path.join(resume_dir, "ckpt.pt")
+
+        # Prepare LoRA config if fine-tuning
+        lora_config = None
+        if finetune_lora:
+            print("\n" + "=" * 70)
+            print("LoRA FINE-TUNING MODE")
+            print("=" * 70 + "\n")
+
+            lora_config = {
+                'rank': cfg.get("lora_rank", 8),
+                'alpha': cfg.get("lora_alpha", 16.0),
+                'dropout': cfg.get("lora_dropout", 0.0),
+                'targets': cfg.get("lora_targets", ['c_attn', 'c_proj']),
+            }
+
+        # Use unified checkpoint manager
+        model, metadata = CheckpointManager.load_model(
+            ckpt_path=ckpt_path,
+            device=device_type,
+            apply_lora=finetune_lora,
+            lora_config=lora_config,
+        )
+
+        # Extract model_args from loaded metadata
+        model_args = metadata['model_args']
+
+    else:
+        raise ValueError(f"Unknown init_from: {init_from}. Use 'scratch' or 'resume'.")
+
+    # Configure optimizer
+    # If LoRA fine-tuning: only optimize LoRA parameters
+    # Otherwise: optimize all parameters
     optimizer = model.configure_optimizers(
         weight_decay=cfg.get("weight_decay", 0.1),
         learning_rate=cfg["learning_rate"],
         betas=(cfg.get("beta1", 0.9), cfg.get("beta2", 0.95)),
+        lora_only=finetune_lora,
     )
 
     if compile_model and hasattr(torch, "compile"):
@@ -134,19 +176,6 @@ def main():
     running_loss = 0.0
     model.train()
 
-    def save_json(obj: dict, path: str):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=2)
-
-    def sha256_file(path: str) -> str:
-        import hashlib
-
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
-
     for iter_num in range(cfg["max_iters"] + 1):
         # evaluation
         if iter_num % cfg["eval_interval"] == 0:
@@ -164,36 +193,23 @@ def main():
             print(f"iter {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if losses["val"] < best_val_loss:
                 best_val_loss = losses["val"]
-                ckpt = {
-                    "model": model.state_dict(),
-                    "config": cfg,
-                    "model_args": model_args,
-                    "iter": iter_num,
-                }
-                ckpt_path = os.path.join(out_dir, "ckpt.pt")
-                torch.save(ckpt, ckpt_path)
 
-                # save safetensors weights
-                st_path = os.path.join(out_dir, "model.safetensors")
-                save_file(model.state_dict(), st_path)
-
-                # save configs and metadata for export
-                save_json(model_args, os.path.join(out_dir, "model_args.json"))
-                save_json(cfg, os.path.join(out_dir, "config.json"))
-                export_meta = {
-                    "iter": iter_num,
-                    "best_val_loss": best_val_loss,
-                    "ckpt_pt": os.path.basename(ckpt_path),
-                    "safetensors": {
-                        "path": os.path.basename(st_path),
-                        "sha256": sha256_file(st_path),
-                    },
-                    "tokenizer": {
-                        "name": "gpt2",
-                        "vocab_size": vocab_size,
-                    },
+                # Save checkpoint using unified checkpoint manager
+                save_metadata = {
+                    'model_args': model_args,
+                    'config': cfg,
+                    'iter': iter_num,
+                    'best_val_loss': best_val_loss,
                 }
-                save_json(export_meta, os.path.join(out_dir, "export_meta.json"))
+
+                print(f"Saving checkpoint (iter {iter_num}, val loss {best_val_loss:.4f})...")
+                CheckpointManager.save_checkpoint(
+                    model=model,
+                    save_dir=out_dir,
+                    metadata=save_metadata,
+                    save_safetensors=True,
+                )
+
             model.train()
 
         # learning rate schedule

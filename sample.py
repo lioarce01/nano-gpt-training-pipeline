@@ -1,18 +1,39 @@
 import argparse
 import os
+import json
 import pickle
 
 import torch
 import tiktoken
+from safetensors.torch import load_file
 
 from model import GPT, GPTConfig
 
 
 def load_checkpoint(out_dir: str):
+    st_path = os.path.join(out_dir, "model.safetensors")
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
-    if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
-    return torch.load(ckpt_path, map_location="cpu")
+    model_args_path = os.path.join(out_dir, "model_args.json")
+    config_path = os.path.join(out_dir, "config.json")
+
+    data = {}
+    state_dict = None
+
+    # Prefer safetensors + json configs
+    if os.path.exists(st_path) and os.path.exists(model_args_path):
+        state_dict = load_file(st_path, device="cpu")
+        with open(model_args_path, "r", encoding="utf-8") as f:
+            data["model_args"] = json.load(f)
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data["config"] = json.load(f)
+    elif os.path.exists(ckpt_path):
+        data = torch.load(ckpt_path, map_location="cpu")
+        state_dict = data["model"]
+    else:
+        raise FileNotFoundError(f"No checkpoint found in {out_dir}")
+
+    return data, state_dict
 
 
 def main():
@@ -21,23 +42,28 @@ def main():
     parser.add_argument("--start", type=str, default="ROMEO:", help="Prompt text")
     parser.add_argument("--max_new_tokens", type=int, default=80)
     parser.add_argument("--num_samples", type=int, default=1)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top_k", type=int, default=0, help="0 = disabled")
+    parser.add_argument("--top_p", type=float, default=1.0, help="1.0 = disabled")
     args = parser.parse_args()
 
-    ckpt = load_checkpoint(args.out_dir)
-    model_args = ckpt["model_args"]
+    data, state_dict = load_checkpoint(args.out_dir)
+    model_args = data.get("model_args", {})
 
-    dataset = ckpt.get("config", {}).get("dataset", "shakespeare")
+    # dataset info
+    cfg = data.get("config", {})
+    dataset = cfg.get("dataset", "shakespeare")
     meta_path = os.path.join("data", dataset, "meta.pkl")
     vocab_size = 50257
     if os.path.exists(meta_path):
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
         vocab_size = meta.get("vocab_size", vocab_size)
-
     model_args["vocab_size"] = vocab_size
+
     config = GPTConfig(**model_args)
     model = GPT(config)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -47,10 +73,34 @@ def main():
     start_ids = start_ids[-config.block_size :]
     x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
 
+    def top_k_top_p_filter(logits: torch.Tensor, top_k: int, top_p: float):
+        # logits: (batch, vocab)
+        if top_k > 0:
+            v, _ = torch.topk(logits, top_k)
+            thresh = v[:, -1].unsqueeze(1)
+            logits = torch.where(logits < thresh, torch.tensor(float("-inf"), device=logits.device), logits)
+        if top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+            mask = cumulative_probs > top_p
+            mask[..., 0] = False
+            sorted_logits[mask] = float("-inf")
+            logits = torch.full_like(logits, float("-inf"))
+            logits.scatter_(1, sorted_indices, sorted_logits)
+        return logits
+
     for _ in range(args.num_samples):
         with torch.no_grad():
-            y = model.generate(x, max_new_tokens=args.max_new_tokens)[0]
-        text = enc.decode(y.tolist())
+            generated = x
+            for _ in range(args.max_new_tokens):
+                idx_cond = generated[:, -config.block_size :]
+                logits, _ = model(idx_cond)
+                logits = logits[:, -1, :] / max(args.temperature, 1e-6)
+                logits = top_k_top_p_filter(logits, args.top_k, args.top_p)
+                probs = torch.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                generated = torch.cat((generated, next_token), dim=1)
+            text = enc.decode(generated[0].tolist())
         print("---- SAMPLE ----")
         print(text)
 

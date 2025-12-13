@@ -16,21 +16,21 @@ config = {
     "batch_size": 8,  # keep modest for CPU
     "block_size": 256,
     # model (CPU-friendly, smaller but still non-toy)
-    "n_layer": 4,
-    "n_head": 4,
-    "n_embd": 256,
-    "dropout": 0.2,
+    "n_layer": 5,
+    "n_head": 6,
+    "n_embd": 288,
+    "dropout": 0.25,
     # adamw optimizer
     "learning_rate": 3e-4,
-    "max_iters": 3000,
+    "max_iters": 3200,
     "weight_decay": 1e-1,
     "beta1": 0.9,
     "beta2": 0.95,
     # lr schedule
-    "decay_lr": True,
+    "decay_lr": False,
     "warmup_iters": 200,
-    "lr_decay_iters": 3000,
-    "min_lr": 3e-5,
+    "lr_decay_iters": 8000,
+    "min_lr": 1e-4,
     # system
     "device": "cpu",  # fuerza CPU en el 7800X3D
     "dtype": "float32",  # fp32 es lo más estable en CPU

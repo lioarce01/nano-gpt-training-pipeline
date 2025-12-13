@@ -22,6 +22,7 @@ build/
 # Checkpoints and outputs
 out*/
 *.pt
+*.safetensors
 *.bin
 *.pkl
 
@@ -29,8 +30,11 @@ out*/
 data/**/train.bin
 data/**/val.bin
 data/**/meta.pkl
+data/**/train.txt
+data/**/val.txt
 
 # OS junk
 .DS_Store
 Thumbs.db
 
+docs/

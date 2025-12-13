@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import math
 import os
 import time
@@ -7,6 +8,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+from safetensors.torch import save_file
 
 from model import GPT, GPTConfig
 
@@ -132,6 +134,19 @@ def main():
     running_loss = 0.0
     model.train()
 
+    def save_json(obj: dict, path: str):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+
+    def sha256_file(path: str) -> str:
+        import hashlib
+
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     for iter_num in range(cfg["max_iters"] + 1):
         # evaluation
         if iter_num % cfg["eval_interval"] == 0:
@@ -149,15 +164,36 @@ def main():
             print(f"iter {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if losses["val"] < best_val_loss:
                 best_val_loss = losses["val"]
-                torch.save(
-                    {
-                        "model": model.state_dict(),
-                        "config": cfg,
-                        "model_args": model_args,
-                        "iter": iter_num,
+                ckpt = {
+                    "model": model.state_dict(),
+                    "config": cfg,
+                    "model_args": model_args,
+                    "iter": iter_num,
+                }
+                ckpt_path = os.path.join(out_dir, "ckpt.pt")
+                torch.save(ckpt, ckpt_path)
+
+                # save safetensors weights
+                st_path = os.path.join(out_dir, "model.safetensors")
+                save_file(model.state_dict(), st_path)
+
+                # save configs and metadata for export
+                save_json(model_args, os.path.join(out_dir, "model_args.json"))
+                save_json(cfg, os.path.join(out_dir, "config.json"))
+                export_meta = {
+                    "iter": iter_num,
+                    "best_val_loss": best_val_loss,
+                    "ckpt_pt": os.path.basename(ckpt_path),
+                    "safetensors": {
+                        "path": os.path.basename(st_path),
+                        "sha256": sha256_file(st_path),
                     },
-                    os.path.join(out_dir, "ckpt.pt"),
-                )
+                    "tokenizer": {
+                        "name": "gpt2",
+                        "vocab_size": vocab_size,
+                    },
+                }
+                save_json(export_meta, os.path.join(out_dir, "export_meta.json"))
             model.train()
 
         # learning rate schedule

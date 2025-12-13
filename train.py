@@ -118,6 +118,11 @@ def main():
             lora_config=lora_config,
         )
 
+        # CRITICAL: Freeze all non-LoRA parameters after applying LoRA
+        if finetune_lora:
+            from lora import freeze_non_lora_parameters
+            freeze_non_lora_parameters(model)
+
         # Extract model_args from loaded metadata
         model_args = metadata['model_args']
 

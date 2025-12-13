@@ -293,6 +293,57 @@ def apply_lora_to_model(
     }
 
 
+def freeze_non_lora_parameters(model: nn.Module):
+    """
+    Freeze ALL parameters in the model except LoRA parameters.
+
+    This is CRITICAL for LoRA fine-tuning - without this, embeddings,
+    LayerNorms, and lm_head will still be trainable, defeating the purpose
+    of parameter-efficient fine-tuning.
+
+    Args:
+        model: Model with LoRA layers applied
+
+    Returns:
+        Dictionary with statistics about frozen/trainable params
+    """
+    total_params = 0
+    frozen_params = 0
+    lora_params = 0
+
+    # First, freeze ALL parameters
+    for param in model.parameters():
+        param.requires_grad = False
+        total_params += param.numel()
+        frozen_params += param.numel()
+
+    # Then, unfreeze ONLY LoRA parameters
+    for module in model.modules():
+        if isinstance(module, LinearWithLoRA):
+            for param in module.lora.parameters():
+                param.requires_grad = True
+                lora_params += param.numel()
+                frozen_params -= param.numel()
+
+    stats = {
+        'total_params': total_params,
+        'lora_params': lora_params,
+        'frozen_params': frozen_params,
+        'trainable_ratio': lora_params / total_params * 100,
+    }
+
+    print(f"\n{'='*60}")
+    print("FREEZING NON-LORA PARAMETERS")
+    print(f"{'='*60}")
+    print(f"Total parameters:     {stats['total_params']:>12,}")
+    print(f"LoRA parameters:      {stats['lora_params']:>12,} (trainable)")
+    print(f"Frozen parameters:    {stats['frozen_params']:>12,}")
+    print(f"Trainable ratio:      {stats['trainable_ratio']:>12.2f}%")
+    print(f"{'='*60}\n")
+
+    return stats
+
+
 def get_lora_parameters(model: nn.Module):
     """
     Extract only LoRA parameters from a model (for optimizer).

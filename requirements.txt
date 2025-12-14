@@ -4,5 +4,5 @@ numpy
 torch>=2.0.0
 safetensors
 packaging
-datasets  # For downloading arXiv papers
-
+datasets
+peft>=0.7.0

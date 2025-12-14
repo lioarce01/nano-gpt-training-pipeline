@@ -5,6 +5,12 @@ This script generates text from both the original TinyStories model and the
 LoRA-finetuned scientific model to demonstrate domain adaptation.
 """
 
+import sys
+import os
+
+# Add parent directory to path to import from root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import tiktoken
 from checkpoint import CheckpointManager

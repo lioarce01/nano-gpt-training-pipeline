@@ -26,12 +26,24 @@ out*/
 *.bin
 *.pkl
 
-# Data
+# Trained models directory
+models/*/ckpt.pt
+models/*/model.safetensors
+models/*/*.bin
+models/*/*.pkl
+models/*/adapters/
+
+# Data and datasets
 data/**/train.bin
 data/**/val.bin
 data/**/meta.pkl
 data/**/train.txt
 data/**/val.txt
+data/**/*.txt           # Excluir todos los .txt en data/ (datasets grandes)
+data/**/*.bin
+data/**/*.pkl
+data/**/*.parquet       # HuggingFace datasets cache
+data/**/*.arrow         # HuggingFace datasets cache
 
 # OS junk
 .DS_Store

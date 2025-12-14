@@ -17,11 +17,8 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = False  # set True to add bias terms to Linear/LayerNorm
 
-    # LoRA configuration (for fine-tuning)
-    lora_rank: int = 0  # 0 = disabled, typical: 4-32
-    lora_alpha: float = 16.0  # scaling factor (typically 2 * rank)
-    lora_dropout: float = 0.0  # dropout for LoRA path
-    lora_targets: tuple = ('c_attn', 'c_proj')  # which layers to apply LoRA to
+    # PEFT compatibility attributes
+    model_type: str = "gpt"  # Required by PEFT
 
 
 class CausalSelfAttention(nn.Module):
@@ -111,6 +108,9 @@ class GPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
+        # PEFT compatibility: Add generation_config attribute
+        self.generation_config = None
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module):
@@ -144,6 +144,15 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
+    def prepare_inputs_for_generation(self, input_ids, **kwargs):
+        """
+        Prepare inputs for generation (required by PEFT for causal LM).
+
+        This method is called by HuggingFace generation utilities and PEFT.
+        For our simple GPT, we just return the input_ids as-is.
+        """
+        return {"idx": input_ids}
+
     @torch.no_grad()
     def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         for _ in range(max_new_tokens):
@@ -165,28 +174,33 @@ class GPT(nn.Module):
             weight_decay: Weight decay for regularization
             learning_rate: Learning rate
             betas: Adam beta parameters (beta1, beta2)
-            lora_only: If True, only optimize LoRA parameters (for fine-tuning)
+            lora_only: If True, only optimize LoRA parameters (PEFT mode)
         """
         if lora_only:
-            # LoRA fine-tuning mode: only optimize LoRA parameters
-            from lora import LinearWithLoRA
+            # PEFT LoRA fine-tuning mode: only optimize adapter parameters
+            from peft import PeftModel
 
-            lora_params = []
-            for module in self.modules():
-                if isinstance(module, LinearWithLoRA):
-                    lora_params.extend(module.trainable_parameters())
+            if not isinstance(self, PeftModel):
+                raise ValueError(
+                    "lora_only=True but model is not a PeftModel!\n"
+                    "Did you forget to call apply_lora()?"
+                )
 
-            if not lora_params:
-                raise ValueError("lora_only=True but no LoRA parameters found! "
-                                 "Did you forget to call apply_lora()?")
+            print("\nPEFT LoRA mode: only adapter parameters are trainable")
 
-            print(f"\nLoRA fine-tuning mode: optimizing {len(lora_params)} LoRA parameter tensors")
+            # PEFT automatically sets requires_grad for adapter params
+            trainable_params = [p for p in self.parameters() if p.requires_grad]
+
+            if not trainable_params:
+                raise ValueError("No trainable parameters found in PeftModel!")
+
+            print(f"  Found {len(trainable_params)} trainable parameter tensors")
 
             # No weight decay distinction for LoRA (all params are small adapters)
-            optimizer = torch.optim.AdamW(lora_params, lr=learning_rate, betas=betas)
+            optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, betas=betas)
 
         else:
-            # Standard training: optimize all trainable parameters
+            # Standard training: optimize all trainable parameters with weight decay
             decay, no_decay = [], []
             for name, param in self.named_parameters():
                 if not param.requires_grad:
@@ -213,57 +227,47 @@ class GPT(nn.Module):
         target_modules: list = None,
     ):
         """
-        Apply LoRA (Low-Rank Adaptation) to the model for parameter-efficient fine-tuning.
+        Apply LoRA (Low-Rank Adaptation) via PEFT for parameter-efficient fine-tuning.
 
-        This replaces target Linear layers with LinearWithLoRA, which adds trainable
-        low-rank matrices (A, B) while freezing the original weights.
+        IMPORTANT: This returns a NEW PeftModel that wraps the original model.
+        You MUST reassign the returned model: model = model.apply_lora(...)
 
         Args:
             rank: LoRA rank (r), smaller = fewer params, typical: 4-32
             alpha: Scaling factor for LoRA updates (typically 2 * rank)
             dropout: Dropout probability for LoRA path
             target_modules: List of module names to apply LoRA to
-                          (default: ['c_attn', 'c_proj'] from config)
+                          (default: ['c_attn', 'c_proj'])
 
         Returns:
-            Dictionary with statistics about LoRA application
+            PeftModel wrapping this model with LoRA adapters
         """
-        from lora import apply_lora_to_model
+        from peft import get_peft_model
+        from peft_utils import create_lora_config
 
         if target_modules is None:
-            target_modules = list(self.config.lora_targets)
+            target_modules = ['c_attn', 'c_proj']
 
-        print(f"\nApplying LoRA to model:")
+        print(f"\nApplying LoRA via PEFT:")
         print(f"  Rank: {rank}")
         print(f"  Alpha: {alpha}")
         print(f"  Dropout: {dropout}")
         print(f"  Target modules: {target_modules}")
-        print()
 
-        stats = apply_lora_to_model(
-            model=self,
-            target_modules=target_modules,
-            rank=rank,
-            alpha=alpha,
-            dropout=dropout,
-        )
+        # Create LoRA config and apply via PEFT
+        lora_config = create_lora_config(rank, alpha, dropout, target_modules)
+        peft_model = get_peft_model(self, lora_config)
 
-        # Update config to reflect LoRA is enabled
-        self.config.lora_rank = rank
-        self.config.lora_alpha = alpha
-        self.config.lora_dropout = dropout
+        # Print trainable parameters
+        peft_model.print_trainable_parameters()
 
-        print(f"\nLoRA applied successfully!")
-        print(f"  Total LoRA parameters: {stats['total_lora_params']:,}")
-        print(f"  Total base parameters: {stats['total_base_params']:,}")
-        print(f"  Parameter reduction: {stats['param_reduction']}")
-        print()
+        print("\n[SUCCESS] LoRA applied successfully via PEFT!")
 
-        return stats
+        return peft_model
 
     def merge_lora(self):
         """
-        Merge all LoRA weights back into the base model.
+        Merge all LoRA weights back into the base model via PEFT.
 
         After fine-tuning with LoRA, this combines the LoRA adapters (A, B)
         with the frozen base weights (W) to create a single merged model:
@@ -271,16 +275,23 @@ class GPT(nn.Module):
 
         The resulting model has the same architecture as the original but
         incorporates the learned adaptations.
+
+        IMPORTANT: This only works if the model is a PeftModel.
         """
-        from lora import merge_lora_weights
+        from peft import PeftModel
 
-        print("\nMerging LoRA weights into base model...")
-        merge_lora_weights(self)
-        print("LoRA weights merged successfully!")
-        print("Model now contains single merged weights (no LoRA overhead).")
+        if not isinstance(self, PeftModel):
+            print("⚠ Warning: Model is not a PeftModel, nothing to merge")
+            return
 
-        # Reset LoRA config
-        self.config.lora_rank = 0
+        print("\nMerging LoRA weights via PEFT...")
+        merged_model = self.merge_and_unload()
+
+        # Copy merged state into self
+        self.load_state_dict(merged_model.state_dict())
+
+        print("[SUCCESS] LoRA weights merged successfully!")
+        print("  Model is now a standard (non-PEFT) model")
 
     def get_num_params(self, trainable_only: bool = False):
         """

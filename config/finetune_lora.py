@@ -1,40 +1,40 @@
 """
-Config for LoRA fine-tuning: TinyStories model → Scientific domain
+Config for LoRA fine-tuning: TinyStories → Scientific domain
 
-This config demonstrates parameter-efficient fine-tuning using LoRA.
-We load the pre-trained TinyStories model and adapt it to generate
+Demonstrates parameter-efficient fine-tuning using PEFT LoRA.
+Load a pre-trained TinyStories model and adapt it to generate
 scientific paper abstracts using low-rank adaptation.
 
-Key points:
-- init_from='resume': Load TinyStories checkpoint
-- dataset='scientific_papers': Train on arXiv abstracts
-- finetune_lora=True: Enable LoRA mode (only train adapter matrices)
-- lora_rank=8: Low-rank dimension (8 = 98% param reduction)
-- Lower learning rate: Fine-tuning uses smaller LR than pre-training
-- Fewer iterations: Domain adaptation converges quickly with LoRA
+Base model: models/gpt-38M-tinystories-pretrain/ (38M params)
+Target domain: Scientific papers (arXiv)
+Method: LoRA (Low-Rank Adaptation via PEFT)
+
+Training budget: ~4,000 iterations (sufficient for domain adaptation)
+Trainable params: ~2% of total (LoRA rank=16)
+Expected time: 1-3 hours on CPU
 """
 
 config = {
-    # Output directory for LoRA fine-tuned model
-    "out_dir": "out-lora-scientific",
+    # Model output directory (standardized naming)
+    "out_dir": "models/gpt-38M-tinystories-to-scientific-lora",
 
     # Initialization: load pre-trained TinyStories model
-    "init_from": "resume",  # Load checkpoint from out-tinystories
-    "resume_dir": "out-tinystories",  # Where to find the base model
+    "init_from": "resume",
+    "resume_dir": "models/gpt-38M-tinystories-pretrain",  # Base model location
 
     # LoRA fine-tuning mode
-    "finetune_lora": True,  # Enable LoRA (only train adapter params)
+    "finetune_lora": True,  # Enable PEFT LoRA (only train adapter params)
 
-    # LoRA hyperparameters
-    "lora_rank": 8,  # Rank (r): 4-32 typical, 8 is good balance
-    "lora_alpha": 16.0,  # Scaling factor (typically 2 * rank)
-    "lora_dropout": 0.05,  # Dropout on LoRA path (light regularization)
-    "lora_targets": ['c_attn', 'c_proj'],  # Which layers to adapt
+    # LoRA Hyperparameters (PEFT)
+    "lora_rank": 16,        # Rank (r): Higher rank for domain shift
+    "lora_alpha": 32.0,     # Scaling factor (typically 2 * rank)
+    "lora_dropout": 0.05,   # Dropout on LoRA path (light regularization)
+    "lora_targets": ['c_attn', 'c_proj'],  # Target attention layers
 
-    # Evaluation
-    "eval_interval": 200,  # Evaluate every 200 steps
-    "eval_iters": 50,  # Fewer eval iters (faster)
-    "log_interval": 10,  # Log every 10 steps
+    # Evaluation & Logging
+    "eval_interval": 200,   # Evaluate every 200 steps
+    "eval_iters": 50,       # 50 batches for validation
+    "log_interval": 10,     # Log every 10 steps for detailed progress
 
     # Dataset: scientific papers (arXiv abstracts)
     "dataset": "scientific_papers",
@@ -45,8 +45,8 @@ config = {
     "block_size": 256,  # Same as pre-training
 
     # Optimizer: AdamW (only LoRA parameters!)
-    "learning_rate": 2e-4,  # Lower than pre-training (3e-4 → 2e-4)
-    "max_iters": 2000,  # Fewer iterations (LoRA converges fast)
+    "learning_rate": 3e-4,  # Higher LR for LoRA domain adaptation
+    "max_iters": 4000,  # More iterations for domain adaptation
     "weight_decay": 1e-2,  # Light weight decay for LoRA
     "beta1": 0.9,
     "beta2": 0.95,

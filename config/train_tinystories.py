@@ -4,7 +4,7 @@ Defaults lean toward GPU; adjust device/batch if running on CPU.
 """
 
 config = {
-    "out_dir": "out-tinystories",
+    "out_dir": "models/gpt-38M-tinystories-pretrain",
     "eval_interval": 800,
     "eval_iters": 100,
     "log_interval": 20,

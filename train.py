@@ -118,10 +118,11 @@ def main():
             lora_config=lora_config,
         )
 
-        # CRITICAL: Freeze all non-LoRA parameters after applying LoRA
+        # PEFT automatically freezes all non-LoRA parameters
+        # No manual freezing needed (unlike custom LoRA implementation)
         if finetune_lora:
-            from lora import freeze_non_lora_parameters
-            freeze_non_lora_parameters(model)
+            print("\n[OK] PEFT automatically froze all base parameters")
+            print("  Only LoRA adapters are trainable")
 
         # Extract model_args from loaded metadata
         model_args = metadata['model_args']

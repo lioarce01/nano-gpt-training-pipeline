@@ -36,21 +36,30 @@ class CheckpointManager:
     @staticmethod
     def detect_checkpoint_type(ckpt_path: str) -> str:
         """
-        Detect if checkpoint contains LoRA weights.
+        Detect checkpoint type (standard, PEFT LoRA, or legacy custom LoRA).
 
         Args:
             ckpt_path: Path to checkpoint file
 
         Returns:
-            'lora' if checkpoint has LoRA structure, 'standard' otherwise
+            'standard': Standard GPT checkpoint
+            'lora_peft': PEFT LoRA checkpoint (with adapters/ directory)
+            'lora_custom': Legacy custom LoRA checkpoint (deprecated)
         """
         checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+
+        # Check for PEFT checkpoint markers
+        if 'adapter_path' in checkpoint and checkpoint.get('is_lora'):
+            return 'lora_peft'
+
+        # Check for legacy custom LoRA keys in state dict
         state_dict = checkpoint.get('model', checkpoint)
+        if state_dict:
+            lora_keys = [k for k in state_dict.keys() if 'lora' in k.lower() or 'base_linear' in k.lower()]
+            if lora_keys:
+                return 'lora_custom'  # Legacy custom LoRA (deprecated)
 
-        # Check for LoRA keys in state dict
-        lora_keys = [k for k in state_dict.keys() if 'lora' in k.lower() or 'base_linear' in k.lower()]
-
-        return 'lora' if lora_keys else 'standard'
+        return 'standard'
 
     @staticmethod
     def load_model(
@@ -98,31 +107,57 @@ class CheckpointManager:
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
 
-        # Load state dict based on type
-        if ckpt_type == 'lora':
-            # LoRA checkpoint - load with strict=False (missing/extra keys expected)
-            print("Loading LoRA checkpoint (contains adapter weights)...")
-            missing, unexpected = model.load_state_dict(checkpoint['model'], strict=False)
+        # Handle different checkpoint types
+        if ckpt_type == 'lora_custom':
+            # Legacy custom LoRA - no longer supported
+            raise DeprecationWarning(
+                "⚠ DEPRECATED: Custom LoRA checkpoints are no longer supported.\n\n"
+                "This project now uses HuggingFace PEFT for LoRA fine-tuning.\n"
+                "Please retrain your model using: python train.py config/finetune_lora.py\n\n"
+                "Migration benefits:\n"
+                "  - Automatic parameter freezing (no manual bugs)\n"
+                "  - Battle-tested implementation\n"
+                "  - Standard checkpoint format\n"
+                "  - Better compatibility with HuggingFace ecosystem"
+            )
 
-            # Verify we have LoRA keys
-            lora_keys = [k for k in unexpected if 'lora' in k.lower()]
-            if not lora_keys:
-                print("WARNING: Detected as LoRA but no LoRA keys found in unexpected!")
+        elif ckpt_type == 'lora_peft':
+            # PEFT LoRA checkpoint - load adapters from directory
+            from peft_utils import load_peft_adapters
 
-            print(f"  Loaded with {len(lora_keys)} LoRA parameter groups")
+            print("Loading PEFT LoRA checkpoint...")
+
+            # Load base model weights first (if present)
+            if checkpoint.get('model') is not None:
+                model.load_state_dict(checkpoint['model'])
+                print("  [OK] Base model weights loaded")
+
+            # Load PEFT adapters from directory
+            adapter_path = checkpoint.get('adapter_path', 'adapters')
+            ckpt_dir = os.path.dirname(ckpt_path)
+            full_adapter_path = os.path.join(ckpt_dir, adapter_path)
+
+            if not os.path.exists(full_adapter_path):
+                raise FileNotFoundError(
+                    f"PEFT adapter directory not found: {full_adapter_path}\n"
+                    f"Expected PEFT checkpoint structure with adapters/ directory"
+                )
+
+            model = load_peft_adapters(model, full_adapter_path, device)
+            print("  [OK] PEFT adapters loaded successfully")
 
         else:
             # Standard checkpoint
             print("Loading standard checkpoint...")
             model.load_state_dict(checkpoint['model'])
 
-            # Apply LoRA if requested (for fine-tuning)
+            # Apply LoRA if requested (for fine-tuning from pretrained)
             if apply_lora:
                 if lora_config is None:
                     raise ValueError("apply_lora=True but no lora_config provided!")
 
-                print("\nApplying LoRA to loaded model...")
-                model.apply_lora(
+                print("\nApplying LoRA to loaded model via PEFT...")
+                model = model.apply_lora(
                     rank=lora_config.get('rank', 8),
                     alpha=lora_config.get('alpha', 16.0),
                     dropout=lora_config.get('dropout', 0.0),
@@ -177,65 +212,101 @@ class CheckpointManager:
         """
         os.makedirs(save_dir, exist_ok=True)
 
-        # Get state dict
-        state_dict = model.state_dict()
+        # Detect if this is a PEFT model
+        from peft import PeftModel
+        is_peft_lora = isinstance(model, PeftModel)
 
-        # Detect if this is a LoRA model
-        lora_keys = [k for k in state_dict.keys() if 'lora' in k.lower() or 'base_linear' in k.lower()]
-        is_lora = len(lora_keys) > 0
+        if is_peft_lora:
+            # PEFT LoRA checkpoint - save adapters separately
+            from peft_utils import save_peft_adapters
 
-        # Prepare checkpoint
-        checkpoint = {
-            'model': state_dict,
-            'model_args': metadata.get('model_args', {}),
-            'config': metadata.get('config', {}),
-            'iter': metadata.get('iter', 0),
-            'best_val_loss': metadata.get('best_val_loss', None),
-            'is_lora': is_lora,
-        }
+            print("Saving PEFT LoRA checkpoint...")
 
-        if is_lora:
-            # Add LoRA config to checkpoint
-            checkpoint['lora_config'] = {
-                'rank': model.config.lora_rank,
-                'alpha': model.config.lora_alpha,
-                'dropout': model.config.lora_dropout,
-                'targets': list(model.config.lora_targets),
+            # Save PEFT adapters to adapters/ subdirectory
+            adapter_dir = os.path.join(save_dir, 'adapters')
+            save_peft_adapters(model, adapter_dir)
+
+            # Get base model state dict (without LoRA adapters)
+            base_model = model.get_base_model()
+            base_state_dict = base_model.state_dict()
+
+            # Prepare checkpoint (base model + metadata)
+            # Convert target_modules to list if it's a set (for JSON serialization)
+            target_modules = model.peft_config['default'].target_modules
+            if isinstance(target_modules, set):
+                target_modules = list(target_modules)
+
+            checkpoint = {
+                'model': base_state_dict,  # Save base model weights (adapters saved separately)
+                'model_args': metadata.get('model_args', {}),
+                'config': metadata.get('config', {}),
+                'iter': metadata.get('iter', 0),
+                'best_val_loss': metadata.get('best_val_loss', None),
+                'is_lora': True,
+                'adapter_path': 'adapters',  # Relative path to adapters
+                'lora_config': {
+                    'rank': model.peft_config['default'].r,
+                    'alpha': model.peft_config['default'].lora_alpha,
+                    'dropout': model.peft_config['default'].lora_dropout,
+                    'targets': target_modules,
+                },
             }
 
-        # Save PyTorch checkpoint
-        ckpt_path = os.path.join(save_dir, 'ckpt.pt')
-        torch.save(checkpoint, ckpt_path)
-        print(f"✓ Saved checkpoint: {ckpt_path}")
+            # Save PyTorch checkpoint (lightweight - just metadata)
+            ckpt_path = os.path.join(save_dir, 'ckpt.pt')
+            torch.save(checkpoint, ckpt_path)
+            print(f"[OK] Saved checkpoint metadata: {ckpt_path}")
 
-        # Save SafeTensors (optional, for compatibility)
-        if save_safetensors:
-            st_path = os.path.join(save_dir, 'model.safetensors')
-            save_file(state_dict, st_path)
-            print(f"✓ Saved SafeTensors: {st_path}")
+            sha256_hash = None  # No SafeTensors for LoRA metadata
 
-            # Compute SHA256 for SafeTensors
-            sha256_hash = CheckpointManager._sha256_file(st_path)
         else:
-            sha256_hash = None
+            # Standard checkpoint - save full model weights
+            print("Saving standard checkpoint...")
+
+            state_dict = model.state_dict()
+
+            checkpoint = {
+                'model': state_dict,
+                'model_args': metadata.get('model_args', {}),
+                'config': metadata.get('config', {}),
+                'iter': metadata.get('iter', 0),
+                'best_val_loss': metadata.get('best_val_loss', None),
+                'is_lora': False,
+            }
+
+            # Save PyTorch checkpoint
+            ckpt_path = os.path.join(save_dir, 'ckpt.pt')
+            torch.save(checkpoint, ckpt_path)
+            print(f"[OK] Saved checkpoint: {ckpt_path}")
+
+            # Save SafeTensors (optional, for compatibility)
+            if save_safetensors:
+                st_path = os.path.join(save_dir, 'model.safetensors')
+                save_file(state_dict, st_path)
+                print(f"[OK] Saved SafeTensors: {st_path}")
+
+                # Compute SHA256 for SafeTensors
+                sha256_hash = CheckpointManager._sha256_file(st_path)
+            else:
+                sha256_hash = None
 
         # Save JSON metadata
         model_args_path = os.path.join(save_dir, 'model_args.json')
         with open(model_args_path, 'w') as f:
             json.dump(metadata.get('model_args', {}), f, indent=2)
-        print(f"✓ Saved model args: {model_args_path}")
+        print(f"[OK] Saved model args: {model_args_path}")
 
         config_path = os.path.join(save_dir, 'config.json')
         with open(config_path, 'w') as f:
             json.dump(metadata.get('config', {}), f, indent=2)
-        print(f"✓ Saved config: {config_path}")
+        print(f"[OK] Saved config: {config_path}")
 
         # Export metadata
         export_meta = {
             'iter': metadata.get('iter', 0),
             'best_val_loss': metadata.get('best_val_loss', None),
             'ckpt_pt': 'ckpt.pt',
-            'is_lora': is_lora,
+            'is_lora': is_peft_lora,
         }
 
         if save_safetensors and sha256_hash:
@@ -244,15 +315,17 @@ class CheckpointManager:
                 'sha256': sha256_hash,
             }
 
-        if is_lora:
+        if is_peft_lora:
+            export_meta['lora_type'] = 'peft'
+            export_meta['adapter_path'] = 'adapters'
             export_meta['lora_config'] = checkpoint['lora_config']
 
         export_meta_path = os.path.join(save_dir, 'export_meta.json')
         with open(export_meta_path, 'w') as f:
             json.dump(export_meta, f, indent=2)
-        print(f"✓ Saved export metadata: {export_meta_path}")
+        print(f"[OK] Saved export metadata: {export_meta_path}")
 
-        checkpoint_type = "LoRA checkpoint" if is_lora else "Standard checkpoint"
+        checkpoint_type = "PEFT LoRA checkpoint" if is_peft_lora else "Standard checkpoint"
         print(f"\n{checkpoint_type} saved to: {save_dir}")
 
     @staticmethod
@@ -279,7 +352,7 @@ class CheckpointManager:
         # Merge LoRA weights
         print("\nMerging LoRA weights into base model...")
         model.merge_lora()
-        print("✓ LoRA weights merged")
+        print("[OK] LoRA weights merged")
 
         # Update metadata
         metadata['model_args'] = {

@@ -9,7 +9,13 @@ The merged model has the same architecture as the original GPT model
 (no LoRA overhead) and can be used for inference with sample.py or other scripts.
 """
 
+import sys
+import os
 import argparse
+
+# Add parent directory to path to import from root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from checkpoint import CheckpointManager
 
 

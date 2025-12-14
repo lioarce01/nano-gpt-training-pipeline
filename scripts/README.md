@@ -1,137 +1,78 @@
 # Scripts / Utility Tools
 
-Herramientas auxiliares para trabajar con modelos entrenados.
+Auxiliary tools for working with trained GPT models.
 
-## 📁 Contenido
+## Overview
 
-```
-scripts/
-├── sample.py          # Generar texto desde un modelo entrenado
-├── merge_lora.py      # Mergear adaptadores LoRA en modelo base
-└── test_lora.py       # Comparar modelo base vs LoRA fine-tuned
-```
+This directory contains scripts for:
+- **Generating text** from trained models (base or LoRA fine-tuned)
+- **Merging LoRA adapters** into base models for deployment
+- **Comparing models** to validate fine-tuning results
+- **Benchmarking performance** between base and optimized architectures
 
----
+## Scripts
 
-## 🎯 sample.py - Generación de Texto
+### `sample.py` - Text Generation
 
-Genera texto desde un modelo entrenado (GPT estándar o con LoRA).
+Generate text from any trained GPT model checkpoint.
 
-### Uso Básico
-
+**Usage:**
 ```bash
-# Generar desde modelo en models/
+# Basic generation
 python scripts/sample.py --checkpoint models/gpt-38M-scientific-pretrain/ckpt.pt
 
-# Con prompt personalizado
+# Custom prompt
 python scripts/sample.py \
     --checkpoint models/gpt-38M-scientific-pretrain/ckpt.pt \
     --prompt "In this paper we present" \
     --num_samples 3 \
-    --max_tokens 200
+    --max_tokens 200 \
+    --temperature 0.8
 ```
 
-### Parámetros
+**Key parameters:**
+- `--checkpoint`: Path to model checkpoint (`.pt`)
+- `--prompt`: Starting text (default: newline)
+- `--num_samples`: Number of samples to generate
+- `--max_tokens`: Tokens per sample
+- `--temperature`: Sampling randomness (0.1=deterministic, 1.5=creative)
+- `--top_k`: Top-k sampling (limits vocabulary)
 
-```
---checkpoint     Path al checkpoint (.pt) (required)
---prompt         Texto inicial (default: "\n")
---num_samples    Número de muestras a generar (default: 1)
---max_tokens     Tokens a generar por muestra (default: 100)
---temperature    Temperatura de sampling (default: 0.8)
-                 Mayor = más aleatorio, menor = más determinista
---top_k          Top-k sampling (default: 200)
---device         Device: cpu o cuda (default: cpu)
---seed           Semilla random (default: 1337)
-```
+### `merge_lora.py` - Merge LoRA Adapters
 
-### Ejemplos
+Combine LoRA adapters with base model to create standalone checkpoint.
 
-**Modelo científico:**
+**Why merge?**
+- LoRA checkpoint: Small (~5-10 MB), requires base model
+- Merged checkpoint: Standalone (~150 MB), no dependencies, faster inference
+
+**Usage:**
 ```bash
-python scripts/sample.py \
-    --checkpoint models/gpt-38M-scientific-pretrain/ckpt.pt \
-    --prompt "Abstract: " \
-    --max_tokens 150 \
-    --temperature 0.7
-```
-
-**Modelo LoRA fine-tuned:**
-```bash
-python scripts/sample.py \
-    --checkpoint models/gpt-38M-tinystories-to-scientific-lora/ckpt.pt \
-    --prompt "In this study, we investigate" \
-    --num_samples 5
-```
-
-**Sampling creativo (alta temperatura):**
-```bash
-python scripts/sample.py \
-    --checkpoint models/gpt-38M-scientific-pretrain/ckpt.pt \
-    --temperature 1.2 \
-    --top_k 50
-```
-
----
-
-## 🔀 merge_lora.py - Mergear LoRA
-
-Combina adaptadores LoRA con el modelo base para crear un modelo estándar (sin overhead de LoRA).
-
-### ¿Por qué mergear?
-
-**Modelo con LoRA:**
-- Checkpoint pequeño (~5-10 MB de adaptadores)
-- Requiere cargar base + adaptadores
-- Ligero overhead en inferencia
-
-**Modelo mergeado:**
-- Checkpoint completo (~150 MB para 38M params)
-- Carga directa, sin dependencias
-- Inferencia más rápida (sin capa extra de LoRA)
-
-### Uso
-
-```bash
-# Mergear modelo LoRA
 python scripts/merge_lora.py \
     --lora_checkpoint models/gpt-38M-tinystories-to-scientific-lora/ckpt.pt \
     --output_dir models/gpt-38M-tinystories-to-scientific-merged \
     --device cpu
 ```
 
-### Parámetros
-
-```
---lora_checkpoint    Path al checkpoint LoRA (required)
---output_dir         Directorio de salida para modelo mergeado (required)
---device             Device: cpu o cuda (default: cpu)
-```
-
-### Flujo Típico
-
+**Workflow:**
 ```bash
-# 1. Fine-tune con LoRA
+# 1. Fine-tune with LoRA
 python train.py config/finetune_lora.py
 
-# 2. Mergear para deployment
+# 2. Merge for deployment
 python scripts/merge_lora.py \
     --lora_checkpoint models/gpt-38M-tinystories-to-scientific-lora/ckpt.pt \
     --output_dir models/gpt-38M-tinystories-to-scientific-merged
 
-# 3. Usar modelo mergeado
-python scripts/sample.py \
-    --checkpoint models/gpt-38M-tinystories-to-scientific-merged/ckpt.pt
+# 3. Use merged model
+python scripts/sample.py --checkpoint models/gpt-38M-tinystories-to-scientific-merged/ckpt.pt
 ```
 
----
+### `test_lora.py` - Compare Models
 
-## 🔬 test_lora.py - Comparación de Modelos
+Side-by-side comparison of base model vs LoRA fine-tuned model.
 
-Compara generación de texto entre modelo base y modelo LoRA fine-tuned.
-
-### Uso
-
+**Usage:**
 ```bash
 python scripts/test_lora.py \
     --base_checkpoint models/gpt-38M-tinystories-pretrain/ckpt.pt \
@@ -140,85 +81,65 @@ python scripts/test_lora.py \
     --max_tokens 100
 ```
 
-### Parámetros
-
+**Example output:**
 ```
---base_checkpoint    Path al modelo base (required)
---lora_checkpoint    Path al modelo LoRA (required)
---prompt             Texto inicial (default: "Once upon a time")
---max_tokens         Tokens a generar (default: 100)
---temperature        Temperatura de sampling (default: 0.8)
---device             Device: cpu o cuda (default: cpu)
-```
-
-### Ejemplo de Salida
-
-```
-======================================================================
 BASE MODEL (TinyStories):
-======================================================================
-Once upon a time there was a little girl named Lily. She loved to play
-outside in the sun. One day she saw a big red ball...
+Once upon a time there was a little girl named Lily...
 
-======================================================================
 LORA FINE-TUNED MODEL (Scientific):
-======================================================================
-Once upon a time, the field of machine learning was primarily focused
-on supervised learning approaches. Recent advances in self-supervised...
-
-======================================================================
-COMPARISON COMPLETE
-======================================================================
+Once upon a time, the field of machine learning was primarily focused on...
 ```
 
----
+Use this to validate that LoRA fine-tuning successfully adapted the model to a new domain.
 
-## 🛠️ Notas Técnicas
+### `benchmark_optimized.py` - Performance Benchmark
 
-### Path Handling
+Compare training speed of base GPT (`model.py`) vs optimized GPT (`model_optimized.py`).
 
-Todos los scripts en `scripts/` agregan automáticamente el directorio raíz al `sys.path`:
+**Usage:**
+```bash
+# Basic benchmark (float32)
+python scripts/benchmark_optimized.py
 
-```python
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# With BFloat16 (recommended for modern CPUs)
+python scripts/benchmark_optimized.py --dtype bfloat16
+
+# Custom config
+python scripts/benchmark_optimized.py \
+    --batch_size 8 \
+    --block_size 256 \
+    --num_iters 50 \
+    --dtype bfloat16
 ```
 
-Esto permite importar módulos del root (`model.py`, `checkpoint.py`, etc.) sin problemas.
+**Example output:**
+```
+Base model:      2.5 it/s
+Optimized model: 5.0 it/s
 
-### Checkpoints Compatibles
+Speedup: 2.0x faster
+Time savings: 50%
 
-Los scripts funcionan con:
-- ✅ Checkpoints estándar (pretraining desde scratch)
-- ✅ Checkpoints LoRA (PEFT)
-- ✅ Checkpoints mergeados
-- ✅ Formatos: `.pt` (PyTorch) y `.safetensors`
+For 160k iterations (scientific training):
+  Base model:      64 hours
+  Optimized model: 32 hours
+  Time saved:      32 hours
+```
 
-### Performance Tips
+Use this before starting large training runs to estimate actual training time.
 
-**Para generación rápida:**
-- Usa `--temperature 0.5` (más determinista, menos cómputo)
-- Limita `--max_tokens` a lo necesario
-- Usa `--device cuda` si tienes GPU
+## Common Workflows
 
-**Para generación creativa:**
-- Usa `--temperature 1.0-1.2` (más variedad)
-- Ajusta `--top_k` (50-200, menor = más conservador)
-- Genera múltiples muestras con `--num_samples`
-
----
-
-## 📚 Ejemplos Completos
-
-### Pipeline Completo: Pretrain → LoRA → Merge → Sample
+### Complete Training Pipeline
 
 ```bash
 # 1. Pretrain base model
 python train.py config/train_tinystories.py
 
-# 2. LoRA fine-tune to scientific domain
+# 2. LoRA fine-tune to new domain
 python train.py config/finetune_lora.py
 
-# 3. Test comparison
+# 3. Compare base vs fine-tuned
 python scripts/test_lora.py \
     --base_checkpoint models/gpt-38M-tinystories-pretrain/ckpt.pt \
     --lora_checkpoint models/gpt-38M-tinystories-to-scientific-lora/ckpt.pt
@@ -228,38 +149,60 @@ python scripts/merge_lora.py \
     --lora_checkpoint models/gpt-38M-tinystories-to-scientific-lora/ckpt.pt \
     --output_dir models/gpt-38M-tinystories-to-scientific-merged
 
-# 5. Generate scientific text
+# 5. Generate samples
 python scripts/sample.py \
     --checkpoint models/gpt-38M-tinystories-to-scientific-merged/ckpt.pt \
     --prompt "Abstract: In this paper we" \
-    --num_samples 3 \
-    --max_tokens 200 \
-    --temperature 0.7
+    --num_samples 3
 ```
 
----
+### Optimized Training
 
-## ❓ FAQ
+```bash
+# 1. Benchmark speedup
+python scripts/benchmark_optimized.py --dtype bfloat16
 
-**Q: ¿Por qué están en scripts/ y no en root?**
-A: Para mantener el root limpio. Solo `train.py` y módulos core (`model.py`, `checkpoint.py`) deben estar en root.
+# 2. Train with optimized model (~2x faster)
+python train.py config/train_scientific_optimized.py
 
-**Q: ¿Puedo usar estos scripts con modelos de otros proyectos?**
-A: Solo si usan la misma arquitectura GPT y formato de checkpoint. Para otros modelos, necesitarían adaptación.
+# 3. Generate samples
+python scripts/sample.py \
+    --checkpoint models/gpt-38M-scientific-pretrain-optimized/ckpt.pt
+```
 
-**Q: ¿Cómo elijo la temperatura?**
-A:
-- 0.1-0.5: Muy determinista (buen para QA, código)
-- 0.6-0.9: Balanceado (buen default)
-- 1.0-1.5: Creativo (buen para historias, ideas)
+## Technical Notes
 
-**Q: ¿Qué hace top_k?**
-A: Limita el sampling a los K tokens más probables. Menor = más conservador.
+### Path Handling
 
----
+All scripts automatically add the project root to Python path:
+```python
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+```
 
-## 🔗 Ver También
+This allows importing from root (`model.py`, `checkpoint.py`, etc.) regardless of current directory.
 
-- `../TRAINING_GUIDE.md` - Guía completa de entrenamiento
-- `../models/README.md` - Convenciones de naming de modelos
-- `../config/` - Configuraciones de entrenamiento
+### Checkpoint Compatibility
+
+Scripts work with:
+- Standard checkpoints (pretraining from scratch)
+- LoRA checkpoints (PEFT fine-tuned)
+- Merged checkpoints
+- Formats: `.pt` (PyTorch) and `.safetensors`
+
+### Sampling Tips
+
+**For deterministic output:**
+- `--temperature 0.5` (more focused, less random)
+- `--top_k 50` (conservative vocabulary)
+
+**For creative output:**
+- `--temperature 1.0-1.2` (more variety)
+- `--top_k 200` (broader vocabulary)
+- `--num_samples 5` (generate multiple options)
+
+## See Also
+
+- `../MODEL_OPTIMIZED.md` - Detailed guide on optimized GPT architecture
+- `../TRAINING_GUIDE.md` - Complete training workflow documentation
+- `../models/README.md` - Model naming conventions
+- `../config/` - Training configurations

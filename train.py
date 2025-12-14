@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from model import GPT, GPTConfig
+from model_optimized import OptimizedGPT, OptimizedGPTConfig
 from checkpoint import CheckpointManager
 
 
@@ -76,10 +77,13 @@ def main():
     # model init
     init_from = cfg.get("init_from", "scratch")  # 'scratch' or 'resume'
     finetune_lora = cfg.get("finetune_lora", False)  # LoRA fine-tuning mode
+    model_type = cfg.get("model_type", "standard")  # 'standard' or 'optimized'
 
     if init_from == "scratch":
         # Initialize from scratch (standard training)
-        print("Initializing model from scratch...")
+        print(f"Initializing {model_type} model from scratch...")
+
+        # Base model args
         model_args = dict(
             vocab_size=vocab_size,
             block_size=cfg["block_size"],
@@ -88,8 +92,19 @@ def main():
             n_embd=cfg["n_embd"],
             dropout=cfg.get("dropout", 0.0),
         )
-        gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf).to(device_type)
+
+        # Select model class based on type
+        if model_type == "optimized":
+            # OptimizedGPT with modern improvements
+            model_args["bias"] = cfg.get("bias", False)
+            model_args["n_kv_head"] = cfg.get("n_kv_head", None)  # GQA
+            gptconf = OptimizedGPTConfig(**model_args)
+            model = OptimizedGPT(gptconf).to(device_type)
+            print(f"[OK] OptimizedGPT initialized with GQA (n_kv_head={gptconf.n_kv_head})")
+        else:
+            # Standard GPT
+            gptconf = GPTConfig(**model_args)
+            model = GPT(gptconf).to(device_type)
 
     elif init_from == "resume":
         # Load from checkpoint (for fine-tuning or resuming training)

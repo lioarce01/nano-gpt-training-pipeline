@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, Tuple
 
 import torch
 import torch.nn as nn
-from safetensors.torch import save_file, load_file
+from safetensors.torch import save_file, load_file, save_model
 
 from model import GPT, GPTConfig
 
@@ -282,7 +282,7 @@ class CheckpointManager:
             # Save SafeTensors (optional, for compatibility)
             if save_safetensors:
                 st_path = os.path.join(save_dir, 'model.safetensors')
-                save_file(state_dict, st_path)
+                save_model(model, st_path)
                 print(f"[OK] Saved SafeTensors: {st_path}")
 
                 # Compute SHA256 for SafeTensors

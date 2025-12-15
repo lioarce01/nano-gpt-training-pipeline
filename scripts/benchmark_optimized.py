@@ -146,6 +146,15 @@ def main():
     print("2. OPTIMIZED GPT MODEL (RMSNorm + RoPE + GQA + SwiGLU)")
     print("-" * 70)
 
+    # Find valid n_kv_head (must be divisor of n_head for GQA)
+    # Try to get as close to n_head // 2 as possible
+    target_kv = args.n_head // 2
+    n_kv_head = 1
+    for divisor in range(target_kv, 0, -1):
+        if args.n_head % divisor == 0:
+            n_kv_head = divisor
+            break
+
     opt_config = OptimizedGPTConfig(
         vocab_size=50257,
         block_size=args.block_size,
@@ -153,7 +162,7 @@ def main():
         n_head=args.n_head,
         n_embd=args.n_embd,
         dropout=0.0,
-        n_kv_head=max(1, args.n_head // 2),  # GQA with 2:1 Q:KV ratio
+        n_kv_head=n_kv_head,  # GQA: n_kv_head must divide n_head evenly
         bias=False,
     )
     opt_model = OptimizedGPT(opt_config)

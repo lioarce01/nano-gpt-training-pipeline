@@ -36,9 +36,9 @@ config = {
     # Model architecture - uses model_optimized.py
     "model_type": "optimized",  # Use OptimizedGPT instead of GPT
     "n_layer": 5,
-    "n_head": 5,
+    "n_head": 8,
     "n_embd": 320,
-    "n_kv_head": 2,  # GQA: 5 Q heads share 2 KV heads (2.5:1 ratio)
+    "n_kv_head": 2,  # GQA: 8 Q heads share 2 KV heads (4:1 ratio)
     "block_size": 256,
     "dropout": 0.2,
     "bias": False,  # No bias in Linear layers (modern standard)
